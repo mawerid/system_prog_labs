@@ -10,11 +10,11 @@ pthread_cond_t full = PTHREAD_COND_INITIALIZER;
 pthread_cond_t empty = PTHREAD_COND_INITIALIZER;
 
 // for task2
-int writer_count = 0;
-int reader_count = 0;
-pthread_mutex_t writer_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t reader_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t file_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t can_write = PTHREAD_COND_INITIALIZER;
+pthread_cond_t can_read = PTHREAD_COND_INITIALIZER;
+int active_writers = 0;
+int waiting_writers = 0;
+int active_readers = 0;
 
 // for task3
 int thread1_counter = 0;
@@ -53,7 +53,7 @@ void* consumer(void* arg) {
 
 int task1(int argc, char* argv[]) {
     if (argc != 4) {
-        printf("Usage: %s <num_producers> <num_consumers>\n", argv[0]);
+        printf("Usage: %s 1 <num_producers> <num_consumers>\n", argv[0]);
         return 1;
     }
 
@@ -83,70 +83,76 @@ int task1(int argc, char* argv[]) {
 
 void* writer(void* arg) {
     char* filename = (char*)arg;
-    for (int i = 0; i < 5; i++) {
-        pthread_mutex_lock(&writer_mutex);
-        writer_count++;
-        if (writer_count == 1)
-            pthread_mutex_lock(&file_mutex);
-        pthread_mutex_unlock(&writer_mutex);
-
-        printf("Writer is writing to the file\n");
-        FILE* file = fopen(filename, "a");
-        if (file) {
-            fprintf(file, "Data from writer\n");
-            fclose(file);
-        }
-
-        pthread_mutex_lock(&writer_mutex);
-        writer_count--;
-        if (writer_count == 0)
-            pthread_mutex_unlock(&file_mutex);
-        pthread_mutex_unlock(&writer_mutex);
-
-        sleep(1);
+    usleep(rand() % 10000 + 5000);
+    pthread_mutex_lock(&mutex);
+    waiting_writers++;
+    while (active_readers > 0 || active_writers > 0) {
+        pthread_cond_wait(&can_write, &mutex);
     }
+    waiting_writers--;
+    active_writers++;
+    pthread_mutex_unlock(&mutex);
+
+    printf("Writer is writing to the file\n");
+    FILE* file = fopen(filename, "a");
+    if (file) {
+        fprintf(file, "Data from writer\n");
+        fclose(file);
+    }
+
+    pthread_mutex_lock(&mutex);
+    active_writers--;
+    if (waiting_writers > 0) {
+        pthread_cond_signal(&can_write);
+    } else {
+        pthread_cond_broadcast(&can_read);
+    }
+    pthread_mutex_unlock(&mutex);
+
     return NULL;
 }
 
 void* reader(void* arg) {
     char* filename = (char*)arg;
-    for (int i = 0; i < 5; i++) {
-        pthread_mutex_lock(&reader_mutex);
-        reader_count++;
-        if (reader_count == 1)
-            pthread_mutex_lock(&file_mutex);
-        pthread_mutex_unlock(&reader_mutex);
-
-        printf("Reader is reading from the file\n");
-        FILE* file = fopen(filename, "r");
-        if (file) {
-            char buffer[256];
-            while (fgets(buffer, sizeof(buffer), file) != NULL) {
-                printf("Read: %s", buffer);
-            }
-            fclose(file);
-        }
-
-        pthread_mutex_lock(&reader_mutex);
-        reader_count--;
-        if (reader_count == 0)
-            pthread_mutex_unlock(&file_mutex);
-        pthread_mutex_unlock(&reader_mutex);
-
-        sleep(1);
+    usleep(rand() % 10000 + 5000);
+    pthread_mutex_lock(&mutex);
+    while (active_writers > 0) {
+        pthread_cond_wait(&can_read, &mutex);
     }
+    active_readers++;
+    pthread_mutex_unlock(&mutex);
+
+    printf("Reader is reading from the file\n");
+    FILE* file = fopen(filename, "r");
+    if (file) {
+        char buffer[256];
+        while (fgets(buffer, sizeof(buffer), file) != NULL) {
+            printf("Read: %s", buffer);
+        }
+        fclose(file);
+    }
+
+    pthread_mutex_lock(&mutex);
+    active_readers--;
+    if (active_readers == 0) {
+        pthread_cond_signal(&can_write);
+    }
+    pthread_mutex_unlock(&mutex);
+
     return NULL;
 }
 
 int task2(int argc, char* argv[]) {
     if (argc != 5) {
-        printf("Usage: %s <num_readers> <num_writers> <file_path>\n", argv[0]);
+        printf("Usage: %s 2 <num_readers> <num_writers> <file_path>\n", argv[0]);
         return 1;
     }
 
     int num_readers = atoi(argv[2]);
     int num_writers = atoi(argv[3]);
     char* filename = argv[4];
+
+    srand(time(NULL));
 
     pthread_t writer_threads[num_writers];
     pthread_t reader_threads[num_readers];
@@ -194,7 +200,6 @@ void* thread3(void* arg) {
     return NULL;
 }
 
-// Функция для получения текущего размера терминала
 void get_terminal_size(int* rows, int* cols) {
     struct winsize w;
     ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
@@ -202,7 +207,6 @@ void get_terminal_size(int* rows, int* cols) {
     *cols = w.ws_col;
 }
 
-// Функция для перемещения курсора в терминале
 void move_cursor(int row, int col) {
     printf("\e[%d;%df", row, col);
 }
