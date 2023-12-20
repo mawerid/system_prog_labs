@@ -1,0 +1,29 @@
+[{
+		"connected":	true,
+		"id_vendor":	1133,
+		"id_product":	50495
+	}, {
+		"connected":	true,
+		"id_vendor":	7531,
+		"id_product":	3
+	}, {
+		"connected":	true,
+		"id_vendor":	1267,
+		"id_product":	3098
+	}, {
+		"connected":	true,
+		"id_vendor":	3034,
+		"id_product":	297
+	}, {
+		"connected":	true,
+		"id_vendor":	1480,
+		"id_product":	951
+	}, {
+		"connected":	true,
+		"id_vendor":	32903,
+		"id_product":	2603
+	}, {
+		"connected":	true,
+		"id_vendor":	7531,
+		"id_product":	2
+	}]

@@ -1,0 +1,11 @@
+.button_blocked {
+    background-image: none;
+    color: azure;
+    background-color: darkred;
+}
+
+.button {
+    background-image: none;
+    color: azure;
+    background-color: darkgreen;
+}

@@ -1,3 +1,3 @@
-add_executable(file_util main.c)
+add_executable(usb_control main.c)
 
-target_link_libraries(file_util task1 task2)
+target_link_libraries(usb_control PkgConfig::GTK view model libusb-1.0.a udev cjson)
