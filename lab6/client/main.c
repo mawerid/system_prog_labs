@@ -39,7 +39,9 @@ int main(int argc, char *argv[]) {
     const char *username = argv[3];
 
     if (strlen(username) >= USERNAME_SIZE) {
-        fprintf(stderr, "Username is too long (max %d characters)\n", USERNAME_SIZE - 1);
+        fprintf(stderr,
+                "Username is too long (max %d characters)\n",
+                USERNAME_SIZE - 1);
         exit(EXIT_FAILURE);
     }
 
@@ -56,7 +58,9 @@ int main(int argc, char *argv[]) {
     server_address.sin_addr.s_addr = inet_addr(ip_address);
     server_address.sin_port = htons(port);
 
-    if (connect(client_socket, (struct sockaddr *)&server_address, sizeof(server_address)) == -1) {
+    if (connect(client_socket,
+                (struct sockaddr *) &server_address,
+                sizeof(server_address)) == -1) {
         perror("Error connecting to server");
         close(client_socket);
         exit(EXIT_FAILURE);
@@ -81,8 +85,12 @@ int main(int argc, char *argv[]) {
 
     // Create threads for receiving and sending messages
     pthread_t receive_thread, send_thread;
-    if (pthread_create(&receive_thread, NULL, receive_messages, (void *)&client_info) != 0 ||
-        pthread_create(&send_thread, NULL, send_messages, (void *)&client_info) != 0) {
+    if (pthread_create(&receive_thread,
+                       NULL,
+                       receive_messages,
+                       (void *) &client_info) != 0 ||
+        pthread_create(&send_thread, NULL, send_messages, (void *) &client_info)
+            != 0) {
         perror("Error creating threads");
         close(client_socket);
         exit(EXIT_FAILURE);
@@ -103,7 +111,7 @@ int main(int argc, char *argv[]) {
 }
 
 void *receive_messages(void *arg) {
-    ClientInfo *client_info = (ClientInfo *)arg;
+    ClientInfo *client_info = (ClientInfo *) arg;
     char buffer[SERVER_BUFFER_SIZE];
     int bytes_received;
 
@@ -149,7 +157,7 @@ void *receive_messages(void *arg) {
 }
 
 void *send_messages(void *arg) {
-    ClientInfo *client_info = (ClientInfo *)arg;
+    ClientInfo *client_info = (ClientInfo *) arg;
     char buffer[SERVER_BUFFER_SIZE];
     struct pollfd pfd;
     pfd.fd = fileno(stdin);
@@ -274,11 +282,12 @@ int main3(int argc, char *argv[]) {
 
     while ((option = getopt(argc, argv, "n:")) != -1) {
         switch (option) {
-            case 'n':
-                pipe_name = optarg;
+            case 'n':pipe_name = optarg;
                 break;
             default:
-                fprintf(stderr, "Использование: %s -n имя_канала\n", argv[0]);
+                fprintf(stderr,
+                        "Использование: %s -n имя_канала\n",
+                        argv[0]);
                 exit(EXIT_FAILURE);
         }
     }

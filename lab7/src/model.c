@@ -1,9 +1,17 @@
 #include "../include/model.h"
 
-static libusb_device **device_list;
-static ssize_t device_count;
-static Node *blocked_list = NULL;
+libusb_device **device_list;
+ssize_t device_count;
+Node *blocked_list = NULL;
 static char *usb_filepath = "/home/mawerid/system_prog/lab7/devices.json";
+
+libusb_context *context = NULL;
+libusb_hotplug_callback_handle *callback_handle;
+
+// Global data structure
+struct ThreadData threadData;
+extern pthread_t thread_model;
+extern pthread_t thread_view;
 
 // list methods
 Node *create_node(gboolean connected,
@@ -113,8 +121,6 @@ void *control(void *argc) {
 
     int ret_val;
 
-    signal(SIGINT | SIGUSR1, signal_handler);
-
     if (libusb_init(&context) < 0)
         error_handler(LIBUSB_ERROR);
 
@@ -142,8 +148,6 @@ void *control(void *argc) {
                                                blocked_list,
                                                callback_handle);
 
-    pthread_kill(thread_view, SIGUSR1);
-
     if (ret_val != LIBUSB_SUCCESS) {
         fprintf(stderr, "Error registering hotplug callback\n");
         delete_list(blocked_list);
@@ -151,6 +155,8 @@ void *control(void *argc) {
         libusb_exit(context);
         error_handler(LIBUSB_ERROR);
     }
+
+    signal(SIGINT | SIGUSR1, signal_handler);
 
     printf("Vendor ID\tProduct ID\n");
 
@@ -199,7 +205,7 @@ libusb_device *search_device(libusb_device **p_device_list,
 void print_usb_device_info(libusb_device *dev) {
     struct libusb_device_descriptor desc;
     if (libusb_get_device_descriptor(dev, &desc) == 0) {
-        printf("0x%04x\t\t0x%04x\n", desc.idVendor, desc.idProduct);
+        printf("%d\t\t%d\n", desc.idVendor, desc.idProduct);
     }
 }
 
@@ -270,6 +276,9 @@ Node *usb_list_to_node_list(libusb_device **p_device_list,
     struct libusb_device_descriptor desc;
     int ret_val;
 
+    if (p_device_list == NULL)
+        printf("Nope\n");
+
     for (int i = 0; i < p_device_count; i++) {
         ret_val = libusb_get_device_descriptor(p_device_list[i], &desc);
         if (ret_val < 0) {
@@ -293,12 +302,41 @@ ExitCode send_to_view(Node *p_blocked_list,
     printf("Send to view...\n");
     Node *dev_list = usb_list_to_node_list(p_device_list, p_device_count);
 
-    char buffer[256];
+    printf("SIGNAL FROM MODEL %lu\n", pthread_self());
+    pthread_kill(thread_view, SIGUSR2);
+    sleep(1);
 
-    sprintf(buffer, "%zd\n", p_device_count);
+    char buffer[64];
+
+    printf("MODEL: %zd\n", p_device_count);
+    sprintf(buffer, "%zd", p_device_count);
 
     int named_pipe = open(pipe_name, O_WRONLY);
-    write(named_pipe, buffer, strlen(buffer) + 1);
+
+    pthread_mutex_lock(&threadData.mutex);
+    write(named_pipe, buffer, sizeof(buffer));
+    pthread_mutex_unlock(&threadData.mutex);
+    for (Node *ptr = dev_list; ptr != NULL; ptr = ptr->next) {
+
+        gboolean is_blocked = FALSE;
+        if (search(p_blocked_list, ptr->id_vendor, ptr->id_product))
+            is_blocked = TRUE;
+
+        printf("MODEL: %hu %hu %d\n",
+               ptr->id_vendor,
+               ptr->id_product,
+               is_blocked);
+
+        sprintf(buffer,
+                "%hu %hu %d",
+                ptr->id_vendor,
+                ptr->id_product,
+                is_blocked);
+
+        pthread_mutex_lock(&threadData.mutex);
+        write(named_pipe, buffer, sizeof(buffer));
+        pthread_mutex_unlock(&threadData.mutex);
+    }
 
     for (Node *ptr = dev_list; ptr != NULL; ptr = ptr->next) {
 
@@ -306,16 +344,25 @@ ExitCode send_to_view(Node *p_blocked_list,
         if (search(p_blocked_list, ptr->id_vendor, ptr->id_product))
             is_blocked = TRUE;
 
+        printf("MODEL: %hu %hu %d\n",
+               ptr->id_vendor,
+               ptr->id_product,
+               is_blocked);
+
         sprintf(buffer,
-                "%huc\t%huc\t%d\n",
+                "%hu %hu %d",
                 ptr->id_vendor,
                 ptr->id_product,
                 is_blocked);
 
-        write(named_pipe, buffer, strlen(buffer) + 1);
+        pthread_mutex_lock(&threadData.mutex);
+        write(named_pipe, buffer, sizeof(buffer));
+        pthread_mutex_unlock(&threadData.mutex);
     }
 
     delete_list(dev_list);
+
+    sleep(1);
 
     close(named_pipe);
 
@@ -326,40 +373,54 @@ void signal_handler(int signal) {
     if (signal == SIGINT) {
         is_running = 0;
     } else if (signal == SIGUSR1) {
-        pthread_kill(thread_view, SIGUSR1);
-        if (threadData.productID != 0 && threadData.vendorID != 0) {
-            libusb_device *device = search_device(device_list,
-                                                  device_count,
-                                                  threadData.vendorID,
-                                                  threadData.productID);
-            if (search(blocked_list, threadData.vendorID, threadData.productID))
-                unblock_device(blocked_list, device_list, device_count, device);
-            else
-                block_device(blocked_list, device_list, device_count, device);
+        if (pthread_self() == thread_model) {
+            if (threadData.productID != 0 && threadData.vendorID != 0) {
+                libusb_device *device = search_device(device_list,
+                                                      device_count,
+                                                      threadData.vendorID,
+                                                      threadData.productID);
+                if (blocked_list != NULL) {
+                    if (search(blocked_list,
+                               threadData.vendorID,
+                               threadData.productID))
+                        unblock_device(blocked_list,
+                                       device_list,
+                                       device_count,
+                                       device);
+                    else
+                        block_device(blocked_list,
+                                     device_list,
+                                     device_count,
+                                     device);
+                } else {
+                    block_device(blocked_list,
+                                 device_list,
+                                 device_count,
+                                 device);
+                }
+//                update_blocked_list(blocked_list, device_list, device_count);
+                save_config(blocked_list);
 
-            update_blocked_list(blocked_list, device_list, device_count);
-            save_config(blocked_list);
+                send_to_view(blocked_list, device_list, device_count);
 
-            send_to_view(blocked_list, device_list, device_count);
+                pthread_mutex_lock(&threadData.mutex);
+                threadData.productID = 0;
+                threadData.vendorID = 0;
+                pthread_mutex_unlock(&threadData.mutex);
+            } else {
+                libusb_free_device_list(device_list, 1);
+                device_count = libusb_get_device_list(context, &device_list);
+                if (device_count < 0) {
+                    libusb_exit(context);
+                    error_handler(LIBUSB_ERROR);
+                }
+                save_devices_to_file(usb_list_to_node_list(device_list,
+                                                           device_count),
+                                     usb_filepath);
+//                update_blocked_list(blocked_list, device_list, device_count);
 
-            pthread_mutex_lock(&threadData.mutex);
-            threadData.productID = 0;
-            threadData.vendorID = 0;
-            pthread_mutex_unlock(&threadData.mutex);
-        } else {
-            libusb_free_device_list(device_list, 1);
-            device_count = libusb_get_device_list(context, &device_list);
-            if (device_count < 0) {
-                libusb_exit(context);
-                error_handler(LIBUSB_ERROR);
+                send_to_view(blocked_list, device_list, device_count);
             }
-            save_devices_to_file(usb_list_to_node_list(device_list,
-                                                       device_count),
-                                 usb_filepath);
-            update_blocked_list(blocked_list, device_list, device_count);
-
-            send_to_view(blocked_list, device_list, device_count);
-
         }
     }
 }
@@ -535,11 +596,13 @@ ExitCode update_blocked_list(Node *list,
             device->connected = TRUE;
     }
 
+    save_config(list);
+
     return SUCCESS;
 }
 
 // block/unblock
-ExitCode block_device(Node *list,
+ExitCode unblock_device(Node *list,
                       libusb_device **p_device_list,
                       ssize_t p_device_count,
                       libusb_device *device) {
@@ -559,7 +622,7 @@ ExitCode block_device(Node *list,
     // Block the USB device
     ret = libusb_kernel_driver_active(dev_handle, 0);
     if (ret == 1) {
-        ret = libusb_detach_kernel_driver(dev_handle, 0);
+        ret = libusb_attach_kernel_driver(dev_handle, 0);
         if (ret != LIBUSB_SUCCESS)
             return LIBUSB_ERROR;
     } else if (ret != 0)
@@ -570,18 +633,21 @@ ExitCode block_device(Node *list,
 
     delete(list, desc.idVendor, desc.idProduct);
 
-    send_to_view(list, p_device_list, p_device_count);
+    printf("REMOVE FROM BLOCK LIST\n");
+//    send_to_view(list, p_device_list, p_device_count);
 
     return SUCCESS;
 }
 
-ExitCode unblock_device(Node *list,
+ExitCode block_device(Node *list,
                         libusb_device **p_device_list,
                         ssize_t p_device_count,
                         libusb_device *device) {
+
     gint ret;
     libusb_device_handle *dev_handle = NULL;
     struct libusb_device_descriptor desc;
+
 
     ret = libusb_get_device_descriptor(device, &desc);
     if (ret < 0)
@@ -595,7 +661,7 @@ ExitCode unblock_device(Node *list,
     // Unblock the USB device
     ret = libusb_kernel_driver_active(dev_handle, 0);
     if (ret == 0) {
-        ret = libusb_attach_kernel_driver(dev_handle, 0);
+        ret = libusb_detach_kernel_driver(dev_handle, 0);
         if (ret != LIBUSB_SUCCESS)
             return LIBUSB_ERROR;
     } else if (ret != 1)
@@ -604,12 +670,15 @@ ExitCode unblock_device(Node *list,
     if (dev_handle != NULL)
         libusb_close(dev_handle);
 
+    printf("HELLO\n");
+
     if (list == NULL)
         list = create_node(TRUE, desc.idVendor, desc.idProduct);
     else
         append(list, TRUE, desc.idVendor, desc.idProduct);
 
-    send_to_view(list, p_device_list, p_device_count);
+    printf("ADD TO BLOCK LIST\n");
+//    send_to_view(list, p_device_list, p_device_count);
 
     return SUCCESS;
 }

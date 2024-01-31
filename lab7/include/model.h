@@ -14,10 +14,7 @@
 
 static uint8_t is_running = 1;
 
-static char *pipe_name = "usb_control_fifo";
-
-static libusb_context *context = NULL;
-static libusb_hotplug_callback_handle *callback_handle;
+static char *pipe_name = "/tmp/usb_control_fifo";
 
 // Data structure to share between threads
 struct ThreadData {
@@ -26,12 +23,7 @@ struct ThreadData {
     pthread_mutex_t mutex;
 };
 
-// Global data structure
-static struct ThreadData threadData;
-static pthread_t thread_model;
-static pthread_t thread_view;
-
-static const char *config_path = "../../data/config.json";
+static const char *config_path = "/home/mawerid/system_prog/lab7/data/config.json";
 
 typedef enum {
     SUCCESS = 0,

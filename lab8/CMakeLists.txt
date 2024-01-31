@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.26)
-project(file_control C)
+project(usb_control C)
 
-set(CMAKE_C_STANDARD 17)
+set(CMAKE_C_STANDARD 23)
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(GTK REQUIRED gtk+-2.0)
+pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk+-3.0)
 
 include_directories(${GTK_INCLUDE_DIRS})
 link_directories(${GTK_LIBRARY_DIRS})

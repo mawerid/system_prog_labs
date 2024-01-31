@@ -1,12 +1,31 @@
 #include "../include/view.h"
 
-gint load_from_model(DeviceNode *dev_array) {
-    char buffer[256];
+// Global data structure
+extern struct ThreadData threadData;
+pthread_t thread_model;
+pthread_t thread_view;
 
-    int named_pipe = open(pipe_name, O_RDONLY);
+static GtkWidget *window = NULL;
+static DeviceNode *table = NULL;
+static GtkWidget *grid = NULL;
+gboolean done = FALSE;
 
-    ssize_t buffer_len = read(named_pipe, buffer, sizeof(buffer));
-    sscanf(buffer, "%zd", &device_count);
+gint load_from_model(DeviceNode **dev_array) {
+    char buffer[64];
+    char *ptr;
+
+    int named_pipe;
+    ssize_t buffer_len;
+
+    named_pipe = open(pipe_name, O_RDONLY);
+    do {
+        pthread_mutex_lock(&threadData.mutex);
+        buffer_len = read(named_pipe, buffer, sizeof(buffer));
+        pthread_mutex_unlock(&threadData.mutex);
+        device_count = strtoul(buffer, &ptr, 10);
+    } while (device_count <= 0);
+
+    printf("Get this %zd\n", device_count);
 
     DeviceNode *table_new = NULL;
     uint16_t vendorID;
@@ -14,14 +33,16 @@ gint load_from_model(DeviceNode *dev_array) {
     gboolean isBlocked;
 
     for (ssize_t i = 0; i < device_count; i++) {
+        pthread_mutex_lock(&threadData.mutex);
         buffer_len = read(named_pipe, buffer, sizeof(buffer));
+        pthread_mutex_unlock(&threadData.mutex);
         sscanf(buffer,
-               "%huc\t%huc\t%d",
+               "%hu %hu %d",
                &vendorID,
                &productID,
                &isBlocked);
 
-        printf("Get this: %huc\t%huc\t%d\n",
+        printf("Get this: %hu %hu %d\n",
                vendorID,
                productID,
                isBlocked);
@@ -33,10 +54,10 @@ gint load_from_model(DeviceNode *dev_array) {
     }
 
     if (table_new) {
-        if (dev_array)
-            delete_list_gui(dev_array);
+        if (*dev_array)
+            delete_list_gui(*dev_array);
 
-        dev_array = table_new;
+        *dev_array = table_new;
     }
 
     close(named_pipe);
@@ -53,17 +74,14 @@ int view(int argc, char *argv[]) {
 
     pthread_create(&thread_model, NULL, control, argv[1]);
 
-    signal(SIGUSR1, signalHandler);
-
-    if (mkfifo(pipe_name, 0666) == -1) {
-        perror("Ошибка при создании именованного канала");
-        exit(EXIT_FAILURE);
-    }
-
     gtk_init(&argc, &argv);
 
+    mkfifo(pipe_name, 0666);
+
+    signal(SIGUSR2, signalHandler);
+
     // Create the main window
-    GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(window), "USB Control");
     gtk_window_set_default_size(GTK_WINDOW(window), 320, 410);
     g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
@@ -78,7 +96,7 @@ int view(int argc, char *argv[]) {
                                    GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
     gtk_box_pack_start(GTK_BOX(vbox), scrolled_window, TRUE, TRUE, 0);
 
-    GtkWidget *grid = gtk_grid_new();
+    grid = gtk_grid_new();
     gtk_container_add(GTK_CONTAINER(scrolled_window), grid);
 
     // Create a progress bar
@@ -94,47 +112,17 @@ int view(int argc, char *argv[]) {
     gtk_grid_attach(GTK_GRID(grid), label2, 1, 0, 1, 1);
     gtk_grid_attach(GTK_GRID(grid), label3, 2, 0, 2, 1);
 
-    DeviceNode *ptr = NULL;
     // Initialize table content (int, int, button in each row)
-
-    load_from_model(table);
-
-    int i = 0;
-    for (DeviceNode *ptr = table; ptr != NULL; ptr = ptr->next) {
-        ptr->button = gtk_button_new_with_label("Block");
-        g_signal_connect(ptr->button,
-                         "clicked",
-                         G_CALLBACK(button_clicked),
-                         ptr);
-
-        // Set initial button color
-        GtkCssProvider *provider = gtk_css_provider_new();
-        GError *error = NULL;
-
-        if (!gtk_css_provider_load_from_path(provider, CSS_PATH, &error)) {
-            g_printerr("Error loading CSS file: %s\n", error->message);
-            g_error_free(error);
-            return -1;
-        }
-        gtk_style_context_add_provider_for_screen(gdk_screen_get_default(),
-                                                  GTK_STYLE_PROVIDER (provider),
-                                                  GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-        GtkStyleContext
-            *context = gtk_widget_get_style_context(ptr->button);
-        gtk_style_context_add_class(context, "button");
-
-        gtk_grid_attach(GTK_GRID(grid), ptr->vendor_label, 0, i + 1, 1, 1);
-        gtk_grid_attach(GTK_GRID(grid), ptr->product_label, 1, i + 1, 1, 1);
-        gtk_grid_attach(GTK_GRID(grid), ptr->button, 2, i + 1, 2, 1);
-        i++;
-    }
+    pthread_kill(thread_model, SIGUSR1);
+    sleep(1);
 
     // Create a refresh button
     GtkWidget *refresh_button = gtk_button_new_with_label("Refresh");
     g_signal_connect(refresh_button,
                      "clicked",
                      G_CALLBACK(refresh),
-                     table);
+                     NULL);
+
     gtk_box_pack_start(GTK_BOX(vbox), refresh_button, FALSE, FALSE, 0);
 
     // Pass vbox as additional data to refresh_table function
@@ -144,11 +132,13 @@ int view(int argc, char *argv[]) {
 
     gtk_main();
 
-    delete_list_gui(table);
-
     pthread_kill(thread_model, SIGINT);
 
     pthread_join(thread_model, SUCCESS);
+
+    delete_list_gui(table);
+
+    unlink(pipe_name);
 
     return 0;
 }
@@ -166,17 +156,47 @@ static void button_clicked(GtkWidget *widget, gpointer data) {
     threadData.productID = row->productID;
     pthread_mutex_unlock(&threadData.mutex);
 
+    printf("SIGNAL FROM VIEW\n");
     pthread_kill(thread_model, SIGUSR1);
+    sleep(1);
 
-    update_gui(row);
+//    update_gui(row);
 }
 
-static void update_content(DeviceNode *p_table) {
-    for (DeviceNode *ptr = p_table; ptr != NULL; ptr = ptr->next) {
+static void update_content() {
+    int i = 0;
+    for (DeviceNode *ptr = table; ptr != NULL; ptr = ptr->next) {
+        g_signal_connect(ptr->button,
+                         "clicked",
+                         G_CALLBACK(button_clicked),
+                         ptr);
+
+        // Set initial button color
+        GtkCssProvider *provider = gtk_css_provider_new();
+        GError *error = NULL;
+
+        if (!gtk_css_provider_load_from_path(provider, CSS_PATH, &error)) {
+            g_printerr("Error loading CSS file: %s\n", error->message);
+            g_error_free(error);
+            return;
+        }
+        gtk_style_context_add_provider_for_screen(gdk_screen_get_default(),
+                                                  GTK_STYLE_PROVIDER (provider),
+                                                  GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+
+//        printf("Attach grid %d\n", i);
+
+        gtk_grid_attach(GTK_GRID(grid), ptr->vendor_label, 0, i + 1, 1, 1);
+        gtk_grid_attach(GTK_GRID(grid), ptr->product_label, 1, i + 1, 1, 1);
+        gtk_grid_attach(GTK_GRID(grid), ptr->button, 2, i + 1, 2, 1);
+
+        i++;
+
         update_gui(ptr);
-//        g_usleep(100000);
         gtk_main_iteration();
     }
+
+    gtk_widget_show_all(window);
 }
 
 static void update_gui(DeviceNode *device) {
@@ -200,19 +220,16 @@ static void update_gui(DeviceNode *device) {
 }
 
 static void refresh(GtkWidget *widget, gpointer data) {
-    DeviceNode *table_new = (DeviceNode *) data;
-
-    gtk_progress_bar_pulse(GTK_PROGRESS_BAR(progressbar));
-    gtk_main_iteration();
+//    DeviceNode *table_new = (DeviceNode *) data;
 
     // Your code to refresh the table goes here
     g_print("Refreshing table...\n");
 
+    printf("SIGNAL FROM VIEW\n");
     pthread_kill(thread_model, SIGUSR1);
-    update_content(table_new);
+    sleep(1);
 
-    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progressbar), 0);
-    gtk_main_iteration();
+//    update_content();
 }
 
 // list methods
@@ -241,6 +258,10 @@ ExitCode delete_node_gui(DeviceNode *node) {
     if (node == NULL)
         return NO_SUCH_POINTER;
 
+    gtk_container_remove(GTK_CONTAINER(grid), node->product_label);
+    gtk_container_remove(GTK_CONTAINER(grid), node->vendor_label);
+    gtk_container_remove(GTK_CONTAINER(grid), node->button);
+
     free(node);
 
     return SUCCESS;
@@ -251,14 +272,13 @@ ExitCode delete_list_gui(DeviceNode *list) {
     if (list == NULL)
         return NO_SUCH_POINTER;
 
-    DeviceNode *current = list->next;
+    DeviceNode *current = list;
     while (current) {
         DeviceNode *next = current->next;
         delete_node_gui(current);
         current = next;
     }
 
-    free(list);
     return SUCCESS;
 }
 
@@ -323,7 +343,13 @@ DeviceNode *search_gui(DeviceNode *list,
 
 // Signal handler function
 void signalHandler(int signal) {
-    if (signal == SIGUSR1) {
-        load_from_model(table);
-    }
+    gtk_progress_bar_pulse(GTK_PROGRESS_BAR(progressbar));
+//    gtk_widget_show_all(window);
+//    gtk_main_iteration();
+
+    load_from_model(&table);
+    update_content();
+
+    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progressbar), 0.0);
+    gtk_main_iteration();
 }

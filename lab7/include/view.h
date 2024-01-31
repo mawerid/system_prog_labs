@@ -9,10 +9,11 @@
 #include <signal.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <glib-unix.h>
 
 #include "model.h"
 
-#define CSS_PATH "../../data/style.css"
+#define CSS_PATH "/home/mawerid/system_prog/lab7/data/style.css"
 
 // Struct to represent each row in the table
 typedef struct DeviceNode {
@@ -27,17 +28,17 @@ typedef struct DeviceNode {
 } DeviceNode;
 
 static GtkWidget *progressbar;
-static ssize_t device_count = 15;
-static DeviceNode *table = NULL;
+static ssize_t device_count = 0;
 
 // Signal handler function
+//static gboolean signalHandler(gpointer user_data);
 void signalHandler(int signal);
 
 // Function to handle button clicks in each row
 static void button_clicked(GtkWidget *widget, gpointer data);
 
 // Function to update table content
-static void update_content(DeviceNode *table);
+static void update_content();
 
 // Function to update the GUI based on table content
 static void update_gui(DeviceNode *device);
@@ -61,7 +62,7 @@ DeviceNode *search_gui(DeviceNode *list,
                        uint16_t id_vendor,
                        uint16_t id_product);
 
-gint load_from_model(DeviceNode *dev_array);
+gint load_from_model(DeviceNode **dev_array);
 
 int view(int argc, char *argv[]);
 
